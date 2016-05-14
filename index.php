@@ -1,9 +1,20 @@
 <?php
 	$msc=include("/var/www/ServiceTags/mysqlConnect.php");
+	$cookie_name = "numScans";
+	if(ISSET($_COOKIE[$cookie_name])){
+		$sessionScans = $_COOKIE[$cookie_name];
+	}
+	else{
+		$sessionScans=0;
+		setcookie($cookie_name,$sessionScans,time()+(1800),"/");
+	}
 	if ($msc->connect_errno) {
     		$postResult = "Failed to connect to MySQL: (".$msc->connect_errno.") ".$msc->connect_error;
 	}
+
 	if(ISSET($_GET['tag']) && strlen($_GET['tag'])>0){
+		$sessionScans++;
+		setcookie($cookie_name,$sessionScans,time()+(3600),"/");
 		// Make it uniform, uppercase
 		$tag = strtoupper($_GET['tag']);
 		// Strip out anything that isn't a Letter or Number
@@ -71,6 +82,28 @@
 			// Note: We should never end up here.  Field ServiceTag is unique, primary key.  It should never return a count > 1.
 			$postResult = "Ambiguous Data Received.  The Service Tag scanned was already in the database, but more than once.";
 		}
+		// Display info about existing information in the database
+		$query = "SELECT COUNT('ServiceTag') AS NumInLists FROM TagList;";
+		$result = $msc->query($query);
+		$data = $result->fetch_assoc();
+		$numInList = $data['NumInLists'];
+
+		$query = "SELECT COUNT('ServiceTag') AS NumFound FROM TagList WHERE Found=1;";
+		$result = $msc->query($query);
+		$data = $result->fetch_assoc();
+		$numFound = $data['NumFound'];
+	}
+	else{
+		// Display info about existing information in the database
+		$query = "SELECT COUNT('ServiceTag') AS NumInLists FROM TagList;";
+		$result = $msc->query($query);
+		$data = $result->fetch_assoc();
+		$numInList = $data['NumInLists'];
+
+		$query = "SELECT COUNT('ServiceTag') AS NumFound FROM TagList WHERE Found=1;";
+		$result = $msc->query($query);
+		$data = $result->fetch_assoc();
+		$numFound = $data['NumFound'];
 	}
 ?>
 <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
@@ -89,11 +122,27 @@
 				<div class="form_description">
 					<h2>Chromebook Service Tag Checker</h2>
 					<p>This form cross references Service Tags.  Enter a Service Tag to continue.</p>
+					<hr style="height:1px; display:block;"/>
+					<?php
+						echo("<p>");
+						if(ISSET($sessionScans)){
+							echo($sessionScans." Devices Scanned In This Session. <br/>");
+						}
+						if(ISSET($numInList)){
+							echo($numInList." Devices In The Master List.<br/>");
+						}
+						if(ISSET($numFound)){
+							echo($numFound." Devices Found So Far.<br/>");
+						}
+						echo("</p>");
+					?>
 					<?php
 						if(ISSET($postResult)){
+							echo("<hr style='height:1px; display: block;'/>");
 							echo("<p ><font size='+1'>".$postResult."</font></p>");
 						}
 					?>
+					<hr/>
 				</div>
 				<ul >
 					<li id="li_1" >
