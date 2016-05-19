@@ -1,11 +1,51 @@
 <?php
+	// DB Connections
 	include("/var/www/ServiceTags/mysqlConnect.php");
+	$msc=mConnect();
+
+	// Setup Some Functions
 	function setCookies($c1_name,$c1_val,$c2_name,$c2_val,$ttl){
 		$expiration = time()+$ttl;
 		setcookie($c1_name,$c1_val,$expiration,"/");
 		setcookie($c2_name,$c2_val,$expiration,"/");
 	}
-	$msc=mConnect();
+	function q_1result($dbCon,$query,$keyVal){
+		$data = $dbCon->query($query);
+		$data = $data->fetch_assoc();
+		$data = $data[$keyVal];
+		return($data);
+	}
+	function generateTable($dbCon,$query){
+		$result = $dbCon->query($query);
+		$sessionScannedTable = "<table border=1 rules=rows style='width:75%; margin:auto; '><tr align=center><th>Service Tag</th><th>List Found On</th><th>Order Number</th></tr>";
+		while($row=($result->fetch_assoc())){
+			$st = $row['ServiceTag'];
+			$wl = $row['WhichList'];
+			$onum = $row['OrderNumber'];
+			if(!ISSET($onum)){
+				$onum="Not Available";
+			}
+			if($wl=="Imported-Good"){
+				$wl="Our Device";
+				$rc = "green";
+			}
+			elseif($wl=="Imported-Bad"){
+				$wl="Not Our Device";
+				$rc = "red";
+			}
+			elseif($wl=="Manually-Scanned"){
+				$wl="Not On Any List";
+				$rc = "teal";
+			}
+			else{
+				$wl="Unknown Error";
+			}
+			$sessionScannedTable.="<tr align=center style='background-color:".$rc."'><td>".$st."</td><td>".$wl."</td><td>".$onum."</td></tr>";
+		}
+		$sessionScannedTable.= "</table>";
+		return($sessionScannedTable);
+	}
+
 	if(is_string($msc)==1) {
     		echo("Could not connect to MySQL Database: Likely incorrect username, password, or DB name.");
 	}
@@ -19,27 +59,21 @@
 		else{
 			// I wanted MySQL Time, Not Apache/PHP Time
 			$cts = "SELECT CURRENT_TIMESTAMP;";
-			$cts = $msc->query($cts);
-			$cts = $cts->fetch_assoc();
-			$cts = $cts['CURRENT_TIMESTAMP'];
+			$cts = q_1result($msc,$cts,"CURRENT_TIMESTAMP");
 			$latest = date("Y-m-d H:i:s",strtotime($cts." - 30 minute"));
 
-			$oldSes = "SELECT SessionID FROM Sessions WHERE LastScan > '".$latest."';";
-			$oldSes = $msc->query($oldSes);
-			$oldSes = $oldSes->fetch_assoc();
-			$oldSes = $oldSes['SessionID'];
+			$oldSes = sprintf("SELECT SessionID FROM Sessions WHERE LastScan > '%s';",$latest);
+			$oldSes = q_1result($msc,$oldSes,"SessionID");
 
 			if($oldSes){
 				$sessionId = $oldSes;
-				$oldData = "SELECT Count('ServiceTag') AS SesScans FROM TagList WHERE FoundInSession='".$sessionId."';";
-				$oldData = $msc->query($oldData);
-				$oldData = $oldData->fetch_assoc();
-				$sessionScans = $oldData['SesScans'];
+				$oldData = sprintf("SELECT Count('ServiceTag') AS SesScans FROM TagList WHERE FoundInSession='%s';",$sessionId);
+				$sessionScans = q_1result($msc,$oldData,"SesScans");
 			}
 			else{
 				$sessionScans=0;
 				$sessionId = uniqid('test-');
-				$writeSession = "INSERT INTO Sessions VALUES ('".$sessionId."',CURRENT_TIMESTAMP,NULL)";
+				$writeSession = sprintf("INSERT INTO Sessions VALUES ('%s',CURRENT_TIMESTAMP,NULL);",$sessionId);
 				$result = $msc->query($writeSession);
 			}
 			setCookies($cookie_name,$sessionScans,$cookie_id,$sessionId,1800);
@@ -49,25 +83,20 @@
 			$tag = strtoupper($_GET['tag']);
 			// Strip out anything that isn't a Letter or Number
 			$tag = preg_replace("/[^a-zA-Z0-9\s]/", "", $tag);
+			$tag = $msc->real_escape_string($tag);
 
 			// Write a simple query
-			$query = "SELECT COUNT('ServiceTag') AS 'TagFound' FROM TagList WHERE ServiceTag='".$tag."';";
-
-			// Execute a query
-			$result = $msc->query($query);
-
-			// Get the data
-			$data = $result->fetch_assoc();
-		    	$found = $data['TagFound'];
+			$query = sprintf("SELECT COUNT('ServiceTag') AS 'TagFound' FROM TagList WHERE ServiceTag='%s';",$tag);
+			$found = q_1result($msc,$query,"TagFound");
 
 			if($found==0){
 				// The Service Tag was not found
 				// Enter it in the table
-				$add='INSERT INTO TagList VALUES ("'.$tag.'","Manually-Scanned",NULL,"1","'.$sessionId.'");';
+				$add=sprintf("INSERT INTO TagList VALUES ('%s','Manually-Scanned',NULL,'1','%s');",$tag,$sessionId);
 				$addResult = $msc->query($add);
 				$sessionScans++;
 				setCookies($cookie_name,$sessionScans,$cookie_id,$sessionId,1800);
-				$update = 'UPDATE Sessions SET LastScan = CURRENT_TIMESTAMP WHERE SessionID="'.$sessionId.'";';
+				$update = sprintf("UPDATE Sessions SET LastScan = CURRENT_TIMESTAMP WHERE SessionID='%s';",$sessionId);
 				$msc->query($update);
 				if($addResult==1){
 					$postResult = "The Service Tag: <b>".$tag."</b> was not previously imported. It has been added.";
@@ -79,11 +108,9 @@
 			elseif($found==1){
 				// The Service Tag was found
 				// Check if it was already scanned.
-				$query = "SELECT Found,WhichList FROM TagList WHERE ServiceTag='".$tag."';";
-				$result = $msc->query($query);
-				$row = $result->fetch_assoc();
-				$found = $row['Found'];
-				$list = $row['WhichList'];
+				$query = sprintf("SELECT Found,WhichList FROM TagList WHERE ServiceTag='%s';",$tag);
+				$found = q_1result($msc,$query,"Found");
+				$list = q_1result($msc,$query,"WhichList");
 
 				// Check Which List the Device was on
 				// 3 Possibilites: Imported-Good, Imported-Bad, Manually-Scanned
@@ -101,16 +128,16 @@
 				if($found==1){
 					$sessionScans++;
 					setCookies($cookie_name,$sessionScans,$cookie_id,$sessionId,1800);
-					$update = 'UPDATE Sessions SET LastScan = CURRENT_TIMESTAMP WHERE SessionID="'.$sessionId.'";';
+					$update = sprintf("UPDATE Sessions SET LastScan = CURRENT_TIMESTAMP WHERE SessionID='%s';",$sessionId);
 					$msc->query($update);
 					$postResult = "The Service Tag: <b>".$tag."</b> is ".$list." and had been marked as found already.";
 				}
 				else{
 					$sessionScans++;
-					$add='UPDATE TagList SET Found="1",FoundInSession="'.$sessionId.'" WHERE ServiceTag="'.$tag.'";';
+					$add = sprintf("UPDATE TagList SET Found='1',FoundInSession='%s' WHERE ServiceTag='%s';",$sessionId,$tag);
 					$addResult = $msc->query($add);
 					setCookies($cookie_name,$sessionScans,$cookie_id,$sessionId,1800);
-					$update = 'UPDATE Sessions SET LastScan = CURRENT_TIMESTAMP WHERE SessionID="'.$sessionId.'";';
+					$update = sprintf("UPDATE Sessions SET LastScan = CURRENT_TIMESTAMP WHERE SessionID='%s';",$sessionId);
 					$msc->query($update);
 					if($addResult==1){
 						$postResult = "The Service Tag: <b>".$tag."</b> is ".$list." and has been marked as Found.";
@@ -126,85 +153,24 @@
 			}
 			// Display info about existing information in the database
 			$query = "SELECT COUNT('ServiceTag') AS NumInLists FROM TagList;";
-			$result = $msc->query($query);
-			$data = $result->fetch_assoc();
-			$numInList = $data['NumInLists'];
+			$numInList = q_1result($msc,$query,"NumInLists");
 
 			$query = "SELECT COUNT('ServiceTag') AS NumFound FROM TagList WHERE Found=1;";
-			$result = $msc->query($query);
-			$data = $result->fetch_assoc();
-			$numFound = $data['NumFound'];
+			$numFound = q_1result($msc,$query,"NumFound");
 
-			// Display the data table at the bottom of the page.
-			$query = "SELECT ServiceTag,WhichList,OrderNumber FROM TagList WHERE (Found=1 AND FoundInSession='".$sessionId."');";
-			$result = $msc->query($query);
-			$sessionScannedTable = "<table border=1 rules=rows style='width:75%; margin:auto; '><tr align=center><th>Service Tag</th><th>List Found On</th><th>Order Number</th></tr>";
-			while($row=($result->fetch_assoc())){
-				$st = $row['ServiceTag'];
-				$wl = $row['WhichList'];
-				$onum = $row['OrderNumber'];
-				if(!ISSET($onum)){
-					$onum="Not Available";
-				}
-				if($wl=="Imported-Good"){
-					$wl="Our Device";
-					$rc = "green";
-				}
-				elseif($wl=="Imported-Bad"){
-					$wl="Not Our Device";
-					$rc = "red";
-				}
-				elseif($wl=="Manually-Scanned"){
-					$wl="Not On Any List";
-					$rc = "teal";
-				}
-				else{
-					$wl="Unknown Error";
-				}
-				$sessionScannedTable.="<tr align=center style='background-color:".$rc."'><td>".$st."</td><td>".$wl."</td><td>".$onum."</td></tr>";
-			}
-			$sessionScannedTable.= "</table>";
+			$query = sprintf("SELECT ServiceTag,WhichList,OrderNumber FROM TagList WHERE (Found=1 AND FoundInSession='%s');",$sessionId);
+			$sessionScannedTable = generateTable($msc,$query);
 		}
 		else{
 			// Display info about existing information in the database
 			$query = "SELECT COUNT('ServiceTag') AS NumInLists FROM TagList;";
-			$result = $msc->query($query);
-			$data = $result->fetch_assoc();
-			$numInList = $data['NumInLists'];
+			$numInList = q_1result($msc,$query,"NumInLists");
 
 			$query = "SELECT COUNT('ServiceTag') AS NumFound FROM TagList WHERE Found=1;";
-			$result = $msc->query($query);
-			$data = $result->fetch_assoc();
-			$numFound = $data['NumFound'];
+			$numFound = q_1result($msc,$query,"NumFound");
 
-			$query = "SELECT ServiceTag,WhichList,OrderNumber FROM TagList WHERE (Found=1 AND FoundInSession='".$sessionId."');";
-			$result = $msc->query($query);
-			$sessionScannedTable = "<table border=1 rules=rows style='width:75%; margin:auto; '><tr align=center><th>Service Tag</th><th>List Found On</th><th>Order Number</th></tr>";
-			while($row=($result->fetch_assoc())){
-				$st = $row['ServiceTag'];
-				$wl = $row['WhichList'];
-				$onum = $row['OrderNumber'];
-				if(!ISSET($onum)){
-					$onum="Not Available";
-				}
-				if($wl=="Imported-Good"){
-					$wl="Our Device";
-					$rc = "green";
-				}
-				elseif($wl=="Imported-Bad"){
-					$wl="Not Our Device";
-					$rc = "red";
-				}
-				elseif($wl=="Manually-Scanned"){
-					$wl="Not On Any List";
-					$rc = "teal";
-				}
-				else{
-					$wl="Unknown Error";
-				}
-				$sessionScannedTable.="<tr align=center style='background-color:".$rc."'><td>".$st."</td><td>".$wl."</td><td>".$onum."</td></tr>";
-			}
-			$sessionScannedTable.= "</table>";
+			$query = sprintf("SELECT ServiceTag,WhichList,OrderNumber FROM TagList WHERE (Found=1 AND FoundInSession='%s');",$sessionId);
+			$sessionScannedTable = generateTable($msc,$query);
 		}
 
 ?>
@@ -275,5 +241,6 @@
 </html>
 
 <?php
+	$msc->close();
 	}
 ?>
